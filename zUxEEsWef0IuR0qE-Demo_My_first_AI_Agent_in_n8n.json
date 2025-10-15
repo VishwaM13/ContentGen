@@ -1,0 +1,324 @@
+{
+  "name": "Demo: My first AI Agent in n8n",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -128,
+        16
+      ],
+      "id": "295970ef-b56d-4e49-8f86-17c34fb3655d",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=ROLE\nYou are “Daily Workout Planner”. Read my Google Sheet and output a clear plan for the NEXT workout day. \nRespect split rotation, fatigue thresholds, and exercise variety. Your #1 priority is managing recovery properly — suggest rest days when needed.\n\nDATA SOURCES\n- Google Sheet: “Gym Split”\n- Sheet / Tab: “Weekly Lifts”\n- Columns (exact headers):\n  date | day | split | muscle_group | exercise | liking | fatigue | notes | done\n- The sheet is sorted with MOST RECENT sessions at the TOP.\n\nMEMORY\n- Use Simple Memory key = workoutSession\n- Store JSON: { \"lastDate\": \"YYYY-MM-DD\", \"lastSplit\": \"Push|Pull|Legs|Rest\", \"streak\": <int> }\n  - streak = number of consecutive training days (non-Rest) ending with the most recent day.\n\nALGORITHM\n1) TARGET DATE\n   - If memory.lastDate exists → targetDate = lastDate + 1 day.\n   - Else → targetDate = today + 1 day.\n\n2) HISTORY WINDOW\n   - Use the top row(s) as the latest completed session; build a 7–10 day history window (top-to-bottom).\n   - Derive lastSplit = split of the top day (unless it’s Rest, then use the next real training day).\n\n3) SESSION FATIGUE TOTALS\n   - For the most recent occurrence of each split (Push/Pull/Legs) in historyWindow, sum that day’s fatigue values (per-exercise).\n   - Thresholds to force REST the next day:\n       Pull > 45  → Rest\n       Push > 40  → Rest\n       Legs > 35  → Rest\n   - “Low-fatigue” flags for potential extra training:\n       Pull < 38\n       Push < 34\n       Legs < 28\n\n4) 3-SPLIT COVERAGE RULE\n   - If the last 3 calendar training days include all three splits (Pull + Push + Legs), suggest Rest.\n   - EXCEPTION: If at least 2 of those 3 splits had low-fatigue (per thresholds), continue rotation instead of resting.\n\n5) STREAK CEILING (MAX 5 DAYS)\n   - If memory.streak ≥ 5, suggest Rest.\n   - EXCEPTION: If the next split’s most recent session was low-fatigue AND the prior day was low-fatigue, allow 1 more day (6th), then force Rest afterwards.\n   - After a Rest day, reset streak = 0.\n\n6) SPLIT SELECTION\n   - If Rest is triggered by any rule above → choose Rest/Active Recovery.\n   - Else rotate from lastSplit in order: Push → Pull → Legs → Push.\n   - Do not repeat yesterday’s split unless that session was low-fatigue.\n\n7) EXERCISE SELECTION (if not Rest)\n   - From historyWindow, choose the most recent entry per exercise for the chosen split.\n   - Rank by: liking DESC, fatigue ASC, recency tie-breaker.\n   - If an exercise had fatigue ≥ 9/10 in the last 3 days → mark “(consider swap)” and suggest a close variant.\n   - Pull-day curls: alternate Preacher ↔ Bayesian; skip arm finisher if recent arm fatigue ≥ 8/10.\n\n8) OUTPUT\n   - If Rest:\n       subject: \"Plan: Rest / Active Recovery — {{date}}\"\n       body: short rest rationale (which rule triggered) + light activity suggestions.\n   - If Training:\n       subject: \"Today's Plan: {{nextSplit}} — {{date}}\"\n       body: readable list of MUSCLE — EXERCISE with [❤ like/10 | ⚡ fat/10], plus 1-line autoregulation guidance.\n\n9) MEMORY UPDATE\n   - memory.lastDate = targetDate\n   - memory.lastSplit = chosen split (Push/Pull/Legs/Rest)\n   - memory.streak = (chosen split == Rest) ? 0 : (previous streak + 1)\n",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        16
+      ],
+      "id": "c065f0d7-62c0-4090-a53a-b1784c05bbbd",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        368
+      ],
+      "id": "c2c841e4-1860-45fb-a651-21a454c3a860",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "AvX6swAILmUuCIid",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "gymPlan"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        384,
+        368
+      ],
+      "id": "29d2b088-01c4-4f57-a854-017113bdb1f8",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f54b767f-4854-4641-a734-5f569ee09b77",
+              "leftValue": "={{ $json['Day of week'] }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -480,
+        224
+      ],
+      "id": "ea43e5f7-5aa5-4d06-8afc-246c18ca04a2",
+      "name": "If",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate yesterday and 2 days ago\nconst today = new Date();\nconst prev1 = new Date(today);\nprev1.setDate(today.getDate() - 1);\nconst prev2 = new Date(today);\nprev2.setDate(today.getDate() - 2);\n\n// Format to YYYY-MM-DD\nfunction fmt(d) {\n  return d.toISOString().slice(0,10);  // \"2025-08-20\"\n}\n\nconst rows = $input.all().map(i => i.json);\n\nconst hasPrev1 = rows.some(r => String(r.date) === fmt(prev1));\nconst hasPrev2 = rows.some(r => String(r.date) === fmt(prev2));\n\nreturn [{\n  json: {\n    hasPrev1,\n    hasPrev2,\n    prev1: fmt(prev1),\n    prev2: fmt(prev2)\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        16
+      ],
+      "id": "9c4f2d0e-b273-4a7e-9cea-a2ec4ab83c0d",
+      "name": "If prev_2 exist"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1OSBfiuvlue7d-MiSyPlIlaLwmtiN2z8Oqs3jnXhWiM0",
+          "mode": "list",
+          "cachedResultName": "Gym Split",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1OSBfiuvlue7d-MiSyPlIlaLwmtiN2z8Oqs3jnXhWiM0/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Weekly Lifts",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1OSBfiuvlue7d-MiSyPlIlaLwmtiN2z8Oqs3jnXhWiM0/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        48,
+        16
+      ],
+      "id": "723c7698-693d-419e-a865-26905471d243",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "kTUIMkii7IC7aBij",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1OSBfiuvlue7d-MiSyPlIlaLwmtiN2z8Oqs3jnXhWiM0",
+          "mode": "list",
+          "cachedResultName": "Gym Split",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1OSBfiuvlue7d-MiSyPlIlaLwmtiN2z8Oqs3jnXhWiM0/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Weekly Lifts",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1OSBfiuvlue7d-MiSyPlIlaLwmtiN2z8Oqs3jnXhWiM0/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "typeVersion": 4.7,
+      "position": [
+        544,
+        368
+      ],
+      "id": "0e8027d9-7af4-4090-ba90-8146daba01fc",
+      "name": "Get row(s) in sheet in Google Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "kTUIMkii7IC7aBij",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "vishfan12@gmail.com",
+        "subject": "Today's Workout Plan",
+        "message": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message', `Good morning! Here’s your training plan for today, based on your recent lifts and fatigue levels.\n\n<h3>Workout for Saturday, August 23 — Legs Day</h3>\n\n<ul>\n  <li>Quads — Barbell Squats [❤ 10/10 | ⚡ 9/10]</li>\n  <li>Quads — Hack Squats [❤ 9/10 | ⚡ 8/10]</li>\n  <li>Hamstrings — Seated Hamstring Curl [❤ 8/10 | ⚡ 8/10]</li>\n  <li>Quads — Leg Extensions [❤ 7/10 | ⚡ 7/10]</li>\n</ul>\n\n<p><strong>Recovery note:</strong> Your last Push and Pull days were moderate fatigue, so today continues the rotation with Legs.</p>\n\n<p><em>Tip:</em> If your lower back feels tight, drop Squats and substitute Leg Press for today.</p>\n\n<p>Stay consistent and listen to your body — you’ve got this!</p>\n`, 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        720,
+        368
+      ],
+      "id": "2ca4ee1b-f8df-4801-968b-88783ad8dcf4",
+      "name": "Send a message in Gmail",
+      "webhookId": "8817dcce-c966-4d0c-869a-ed812a897bc4",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xCc6kSiGtUG0HRXO",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        []
+      ]
+    },
+    "If prev_2 exist": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "If prev_2 exist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet in Google Sheets": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {
+    "Schedule Trigger": [
+      {
+        "json": {
+          "timestamp": "2025-08-20T22:31:26.985-07:00",
+          "Readable date": "August 20th 2025, 10:31:26 pm",
+          "Readable time": "10:31:26 pm",
+          "Day of week": "Wednesday",
+          "Year": "2025",
+          "Month": "August",
+          "Day of month": "20",
+          "Hour": "22",
+          "Minute": "31",
+          "Second": "26",
+          "Timezone": "America/Los_Angeles (UTC-07:00)"
+        }
+      }
+    ]
+  },
+  "triggerCount": 0,
+  "meta": {
+    "templateId": "self-building-ai-agent",
+    "templateCredsSetupCompleted": true
+  }
+}

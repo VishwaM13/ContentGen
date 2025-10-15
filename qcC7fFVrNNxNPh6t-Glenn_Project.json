@@ -1,0 +1,1077 @@
+{
+  "name": "Glenn Project",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1568,
+        -144
+      ],
+      "id": "9bdcf198-a5e6-4121-9459-26cfa5b65013",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google_trends_trending_now"
+            },
+            {
+              "name": "geo",
+              "value": "US"
+            },
+            {
+              "name": "hours",
+              "value": "24"
+            },
+            {
+              "name": "category_id",
+              "value": "14"
+            },
+            {
+              "name": "api_key",
+              "value": "88a69e2a37ece9fb0c98c53ff8397aabbb62f97b960780dd0bb8359ca5c7da84"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1392,
+        -144
+      ],
+      "id": "ad7ed184-6281-4083-b687-4a00632eda82",
+      "name": "Get Trending Topics (SerpAPI)"
+    },
+    {
+      "parameters": {
+        "url": "https://newsdata.io/api/1/latest",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "pub_340e4e6d0ef64c09a1d01909cca3ce97"
+            },
+            {
+              "name": "q",
+              "value": "=={{$json.safe_q}}"
+            },
+            {
+              "name": "language",
+              "value": "en"
+            },
+            {
+              "name": "country",
+              "value": "us"
+            },
+            {
+              "name": "category",
+              "value": "politics"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        784,
+        -1760
+      ],
+      "id": "9563b9b7-28bf-464d-8309-cfe1fca9acc3",
+      "name": "Fetch Articles (NewsAPI)",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Function node — Run Once for All Items\n// Upstream HTTP Request returns ONE item whose json is an ARRAY with one object.\n// We normalize that and produce ONE output item with columns Topic 1..3.\n\nconst all = $input.all();                          // array of incoming items\nconst payload = all[0]?.json;                      // first item’s json\nconst root = Array.isArray(payload) ? payload[0]   // serpapi returns [ { ... } ]\n                                     : (payload || {});\nconst arr = root?.trending_searches || [];\n\nif (!Array.isArray(arr) || !arr.length) {\n  return [{ json: { \"Topic 1\": \"(none)\", \"Topic 2\": \"(none)\", \"Topic 3\": \"(none)\" } }];\n}\n\n// --- helpers ---\nconst now = Date.now() / 1000;\nfunction scoreOf(item) {\n  const vol = Number(item.search_volume || 0);\n  const inc = Number(item.increase_percentage || 0);\n  const activeBoost = item.active ? 1.2 : 1.0;\n  const ageHrs = item.start_timestamp ? Math.max(0, (now - item.start_timestamp) / 3600) : 24;\n  const recency = Math.exp(-Math.log(2) * ageHrs / 12); // 12h half-life\n  return (Math.log1p(vol) * (1 + inc / 100)) * recency * activeBoost;\n}\nconst isPolitics = (cats=[]) =>\n  cats?.some(c => c?.id === 14 || /politics/i.test(c?.name || ''));\n\n// --- rank candidates ---\nlet candidates = arr\n  .filter(i => isPolitics(i.categories || []))\n  .map(i => ({\n    topic: (i.query || '').trim(),\n    score: scoreOf(i),\n    search_volume: i.search_volume || 0,\n    increase_percentage: i.increase_percentage || 0,\n    active: !!i.active,\n    start_timestamp: i.start_timestamp || null,\n    serpapi_trends_link: i.serpapi_google_trends_link || null,\n    serpapi_news_link: i.serpapi_news_link || null,\n    news_page_token: i.news_page_token || null\n  }))\n  // de-dupe by normalized text\n  .reduce((acc, cur) => {\n    const k = cur.topic.toLowerCase().replace(/\\s+/g,' ').trim();\n    if (!k || acc._seen.has(k)) return acc;\n    acc._seen.add(k);\n    acc.list.push(cur);\n    return acc;\n  }, { _seen: new Set(), list: [] }).list\n  .sort((a,b) => b.score - a.score)\n  .slice(0, 3);\n\n// pad to 3\nwhile (candidates.length < 3) {\n  candidates.push({\n    topic: \"(none)\",\n    score: 0,\n    search_volume: 0,\n    increase_percentage: 0,\n    active: false,\n    start_timestamp: null,\n    serpapi_trends_link: null,\n    serpapi_news_link: null,\n    news_page_token: null\n  });\n}\n\nconst [t1, t2, t3] = candidates;\n\nreturn [{\n  json: {\n    \"Topic 1\": t1.topic,\n    \"Topic 1 • Score\": Number(t1.score.toFixed(2)),\n    \"Topic 1 • Volume\": t1.search_volume,\n    \"Topic 1 • Δ%\": t1.increase_percentage,\n    \"Topic 1 • Active\": t1.active,\n    \"Topic 1 • Trends Link\": t1.serpapi_trends_link,\n    \"Topic 1 • News Link\": t1.serpapi_news_link,\n\n    \"Topic 2\": t2.topic,\n    \"Topic 2 • Score\": Number(t2.score.toFixed(2)),\n    \"Topic 2 • Volume\": t2.search_volume,\n    \"Topic 2 • Δ%\": t2.increase_percentage,\n    \"Topic 2 • Active\": t2.active,\n    \"Topic 2 • Trends Link\": t2.serpapi_trends_link,\n    \"Topic 2 • News Link\": t2.serpapi_news_link,\n\n    \"Topic 3\": t3.topic,\n    \"Topic 3 • Score\": Number(t3.score.toFixed(2)),\n    \"Topic 3 • Volume\": t3.search_volume,\n    \"Topic 3 • Δ%\": t3.increase_percentage,\n    \"Topic 3 • Active\": t3.active,\n    \"Topic 3 • Trends Link\": t3.serpapi_trends_link,\n    \"Topic 3 • News Link\": t3.serpapi_news_link\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1216,
+        -144
+      ],
+      "id": "1431644d-b1f5-49d9-b057-45f3900d17a2",
+      "name": "Rank & Select Top 3 Topics"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -832,
+        -144
+      ],
+      "id": "6109d006-8a82-41f1-aa5e-4c909f946f00",
+      "name": "Process Each Topic"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const base = String($json.query || $json.topic || \"\").trim();\nconst extras = Array.isArray($json.trend_breakdown) ? $json.trend_breakdown : [];\nlet parts = [base];\nfor (const term of extras) {\n  const candidate = parts.concat(term).join(\" OR \");\n  if (candidate.length <= 100 && parts.length < 3) parts.push(term); else break;\n}\nlet safe_q = parts.join(\" OR \");\nif (safe_q.length > 100) safe_q = base.slice(0, 100);\nreturn { json: { ...$json, safe_q, safe_q_len: safe_q.length } };\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        -1760
+      ],
+      "id": "d02b89c6-c803-4a03-ae55-401f8b090d1d",
+      "name": "Build Safe Query",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const topic = String($json.topic || $json.query || \"\").trim();\nconst extras = Array.isArray($json.trend_breakdown) ? $json.trend_breakdown : [];\nconst extra = extras.find(t => t && t.length <= 35) || \"\";\nconst vector_q = extra ? `${topic} ${extra}` : topic;\n\nreturn {\n  json: {\n    ...$json,\n    vector_q\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        -1952
+      ],
+      "id": "7555ae55-f6eb-48c7-8d47-a39e24ae89e9",
+      "name": "Glenn Vector Q",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const topic = String($json.topic || $json.query || \"\").trim();\nconst extras = Array.isArray($json.trend_breakdown) ? $json.trend_breakdown : [];\nconst extra = extras.find(t => t && t.length <= 35) || \"\";\nconst vector_q = extra ? `${topic} ${extra}` : topic;\n\nreturn {\n  json: {\n    ...$json,\n    vector_q\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        -1568
+      ],
+      "id": "5001a882-1b03-4f30-ac39-ef7dc32db26c",
+      "name": "George Vector Q",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://atmm3rnx33.us-west-2.awsapprunner.com/search/books",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n    \"query\": \"={{$json.vector_q}}\",\n    \"k\": 10,\n    \"t\": 0.8,\n    \"fetch_k\": 10,\n    \"filter\": {},\n    \"include_summaries\": false,\n    \"namespace\": \"glenn_content\",\n    \"include_llm_response\": true\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        784,
+        -1952
+      ],
+      "id": "c4c3d9c6-2bb2-4da0-90a5-b18fd9ad52e0",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "ul8u9lpZvKs3mGJI",
+          "name": "Bearer Auth account"
+        },
+        "httpHeaderAuth": {
+          "id": "GJuTHC97GfUlbDzQ",
+          "name": "Header Auth account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rank & Select Top 3 Glenn\nconst items = $input.all();\n\n// Build top3 directly from raw passages\nconst scored = items.map(it => {\n  const j = it.json || {};\n  const text = String(j.page_content || j.text || j.content || \"\").trim();\n  const source = j.metadata?.author || j.source || \"GlennAI\";\n  const published = j.metadata?.published || j.published || null;\n\n  if (!text) return null;\n\n  // simple heuristic score\n  const score = Math.min(400, text.length / 4);\n  const excerpt = text.length > 1500 ? text.slice(0, 1500) + \"…\" : text;\n\n  return { text: excerpt, source, published, _score: score };\n})\n// 🔥 filter out nulls here\n.filter((item) => item !== null);\n\n// sort & keep 3\nscored.sort((a, b) => b._score - a._score);\nconst glenn_top3 = scored.slice(0, 3).map(({ _score, ...keep }) => keep);\n\n// Return ONE consolidated item\nreturn [{ json: { glenn_top3 } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        944,
+        -1952
+      ],
+      "id": "5b80c5dc-13c8-4190-b5e8-ec6a004b003d",
+      "name": "Rank & Select Top 3 Glenn",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all results from George HTTP request\nconst items = $input.all();\n\n// If no results, just return an empty structure\nif (!items.length) {\n  return [{ json: { george_top3: [] }}];\n}\n\n// Map into a simplified structure with scores\nconst scored = items.map(it => {\n  const j = it.json || {};\n  const text = String(j.page_content || \"\").trim();\n  const title = j.llm_response?.title || \"\";\n  const summary = j.llm_response?.summary || \"\";\n  const author = j.metadata?.author || \"\";\n  const published = j.metadata?.published || null;\n\n  // quick heuristic score: prefer longer passages + those with summaries\n  let score = Math.min(400, text.length / 4);\n  if (summary) score += 20;\n  if (title) score += 10;\n\n  return {\n    text,\n    title,\n    summary,\n    author,\n    published,\n    score\n  };\n}).filter(x => x.text.length > 100); // filter out junk\n\n// Sort descending by score\nscored.sort((a, b) => b.score - a.score);\n\n// Take top 3\nconst top3 = scored.slice(0, 3).map(({ score, ...rest }) => rest);\n\n// Return as one consolidated item\nreturn [\n  {\n    json: {\n      george_top3: top3\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        944,
+        -1568
+      ],
+      "id": "4ba242f9-c0a9-437f-a592-e89336054374",
+      "name": "Rank & Select Top 3 George",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Input: NewsData latest response on this item: { results: [...] }\nconst results = Array.isArray($json.results) ? $json.results : [];\n\nfunction ts(s){ return new Date(s || 0).getTime(); }\nfunction srcScore(name=''){\n  const n = String(name).toLowerCase();\n  if (/reuters|associated press|ap|bbc|bloomberg|wsj|financial times|ft|npr|axios|politico|economist/.test(n)) return 3;\n  if (/yahoo|msn|news\\.google|feed|aggregator/.test(n)) return 1;\n  return 2;\n}\n\n// score = recency 0.6 + source 0.3 + description length 0.1\nconst top3 = results\n  .map(a => ({\n    title: a.title || '',\n    url: a.link || a.url || '',\n    source: a.source_id || a.source || '',\n    pubDate: a.pubDate || a.published_at || a.date || '',\n    description: a.description || a.content || '',\n    _score:\n      0.6 * ts(a.pubDate || a.published_at || a.date) +\n      0.3 * srcScore(a.source_id || a.source || '') * 1e9 +\n      0.1 * Math.min(400, (a.description || a.content || '').length)\n  }))\n  .sort((a,b) => b._score - a._score)\n  .slice(0, 3)\n  .map(({_score, ...rest}) => rest);\n\n// MUST return a single object in this mode\nreturn {\n  json: {\n    topic: $json.query,                       // carried from earlier nodes\n    trend_breakdown: $json.trend_breakdown || [],\n    news_top3: top3\n  }\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        944,
+        -1760
+      ],
+      "id": "06d79117-dd7a-42d7-9709-e88f23047d91",
+      "name": "Rank & Select Top 3 Google",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://atmm3rnx33.us-west-2.awsapprunner.com/search/books",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"query\": \"={{$json.vector_q}}\",\n  \"k\": 10,\n  \"t\": 0.8,\n  \"fetch_k\": 10,\n  \"filter\": {},\n  \"include_summaries\": false,\n  \"namespace\": \"indexed_content\",\n  \"include_llm_response\": true\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        784,
+        -1568
+      ],
+      "id": "0bac4807-c7fe-43f9-969c-408052c58609",
+      "name": "HTTP Request1",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "ul8u9lpZvKs3mGJI",
+          "name": "Bearer Auth account"
+        },
+        "httpHeaderAuth": {
+          "id": "GJuTHC97GfUlbDzQ",
+          "name": "Header Auth account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "= Updated Prompt (Plain Text Output, No API Names)\n\nYou are a Political News Article Generator with expertise in professional journalism, political analysis, and narrative clarity. Your role is to transform the provided context sources into a polished, publication-ready article that explains trending political issues in a way that is clear, contextualized, and meaningful for readers. You are a Political News Article Generator. Use only the context provided in$json.context. Write a clear, professional article that makes the political topics obvious and relevant. Do not output JSON. Respond only in clean plain text suitable for email or publication.\n\n\nYour Task\n\nWrite a single, cohesive article create a title name that explains the most trending political topics based strictly on the context you are given.\n\nDo not mention or reference the original source APIs by name.\n\nIntegrate details, arguments, and perspectives seamlessly into the narrative.\n\nEnsure the article reads like a professional news or magazine feature.\n\nNarrative & Style Rules\n\nBegin with a direct, engaging lead that sets the stage with who, what, when, and why.\n\nExpand with clear explanations of events, commentary, and historical framing drawn from the context.\n\nPresent arguments and perspectives naturally, without saying “according to Glenn AI” or “NewsData reports.”\n\nUse smooth transitions so the text reads like one continuous article.\n\nKeep the prose professional, journalistic, and accessible to a general audience.\n\nEnd with a thoughtful conclusion about the broader implications of the topic.\n\nWriting & Formatting Rules\n\nOutput must be plain text only — no JSON, no code blocks, no stray symbols.\n\nUse clean paragraphs separated by a blank line.\n\nNo filler text or vague wording; everything should feel anchored in the events and commentary.\n\nFinal output must look ready for professional publication.\n\nInclude a short References section at the end, listing only the titles and authors (but not API names).\n\nOutput Format:\n\nArticle Title\n\nFull article text in clean paragraphs separated by a blank line.\n\nReferences\n- <title> by <author> (<year if available>)  \n- <title> by <author> (<year if available>)  \n\n“Here is your context bundle. Use the \"News\" articles on his absence to write the main article do it on trumps major announcement\" only this content when writing the article. Summarize or quote the text fields (Glenn & George), and use the title, description/excerpt, and url fields from news as the reporting base. Do not mention that the sources came from APIs. Write a polished political news article in plain text, making the trending topic clear.”",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        1920,
+        -1840
+      ],
+      "id": "b8250487-9157-475d-aa1e-e4de9fd800e4",
+      "name": "AI Agent",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4o-mini"
+        },
+        "options": {
+          "responseFormat": "text"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1904,
+        -1632
+      ],
+      "id": "4ac43b5a-36a7-4787-9969-6b258be388e4",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "AvX6swAILmUuCIid",
+          "name": "OpenAi account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "sendTo": "Vishfan12@gmail.com",
+        "subject": "=New News",
+        "message": "=News:\\n- President Donald Trump said he will be making a \"major announcement\" on Tuesday, and conspiracy theories have been gathering pace online since he made the statement\\n- Congress returns this week from its August recess staring down a deadline to fund the government and avert a possible shutdown by month's end.\\n- President Donald Trump is scheduled to make an announcement from the Oval Office at 2:00 p.m. ET on Tuesday as leftists continue to run with rumors about the president’s health. White House Press Secretary Karoline Leavitt said that Trump will make “an exciting announcement related to the Department of Defense.” Trump has not made any ...\\n\\nGlenn:\\n- I think many readers will be shocked to see just how rapidly things are progressing, and, I hope, even more will be inspired to take the steps needed to protect your families, communities, and country from the perils ahead. 8 JOE BIDEN AND THE FUNDAMENTAL TRANSFORMATION OF THE WEST On March 21, 2022, President Joe Biden delivered a telling but largely ignored speech at the Business Roundtable's CEO quarterly meeting in Washington, DC. The Business Roundtable \"is an association of chief executive officers of America's leading companies.\" Unlike many other business groups, the Roundtable has acknowledged that shaping public policy is one of its primary goals. Long before I had heard anything about what was said at the 2022 meeting with Biden, the Business Roundtable had caught my attention. The World Economic Forum has spent an immense amount of time praising the Business Roundtable for announcing in 2019 a \"redefinition\" of the \"purpose of a corporation.\" After agreeing upon the new definition, the Business Roundtable's highly influential group of CEOs wrote, \"Since 1978, Business Roundtable has periodically issued Principles of Corporate Governance that include language on the purpose of a corporation. Each version of that document issued since 1997 has stated that corporations exist principally to serve their shareholders. It has become clear that this language on corporate purpose does not accurately describe the ways in which we and our fellow CEOs endeavor every day to cr…\\n- According to the White House's summary of the March 2022 federal directive, \"the Executive Order calls for measures to,\" among other things, \"Explore a U.S. Central Bank Digital Currency (CBDC) by placing urgency on research and development of a potential United States CBDC, should issuance be deemed in the national interest.\" Additionally, it directs the \"U.S. Government to assess the technological infrastructure and capacity needs for a potential U.S. CBDC in a manner that protects Americans' interests,\" as well as \"encourages the Federal Reserve to continue its research, development, and assessment efforts for a U.S. CBDC, including development of a plan for broader U.S. Government action in support of their work.\" Although the White House crafted some of the executive order's language to give the impression that the president had not made up his mind about whether a CBDC should be developed, it was apparent from the accompanying documents and other provisions of the order that the decision to create a new digital dollar was made well before the White House announced the March 2022 order. For example, the White House's CBDC fact sheet says there is \"urgency on research and development\" of a CBDC. And the order directs the \"Secretary of the Treasury, in consultation with the Secretary of State, the Attorney General, the Secretary of Commerce, the Secretary of Homeland Security, the Director of the Office of Management and Budget, the Director of National Intelligence, and t…\\n- Let's stop for a second and think a little more carefully about that statement, because it really is remarkable and cryptic. Why is Biden reminding the Business Roundtable about the tens of millions of people who were killed in the First and Second World Wars? And even more importantly, what, exactly, were Biden's \"top military people\" telling him when this \"secure meeting\" was being held? And the notion that all of this is coming to Biden's decaying old mind within the context of thinking about a historic opportunity that occurs just once \"every three or four generations\" is disturbing, to say the least. But as hard as it might be to believe, Biden's speech gets even more bizarre in the statement that immediately followed his comments about millions of people dying. \"And now is a time when things are shifting,\" Biden said. \"We're going to-there's going to be a new world order out there, and we've got to lead it. And we've got to unite the rest of the free world in doing it.\" A new world order? What is Biden talking about? I wish I could tell you he elaborated further during his Business Roundtable speech, but, incredibly, he ended his comments there-with the thought of tens of millions of people dead and the birth of a new world order hanging in the air like a thick fog. On March 28, 2022, just seven days after Biden made those incredible comments at a meeting of the Business Roundtable, the World Government Summit kicked off its annual three-day event in Dubai. And no, the …\\n\\nGeorge:\\n- In Case of the Removal of the President from Office, or of his Death, Resignation or Inability to discharge the Powers and Duties of the said Office, the Same shall devolve on the Vice President, and the Congress may by Law provide for the Case of Removal, Death, Resignation or Inability, both of the President and Vice President, declaring what Officer shall then act as President, and such Officer shall act accordingly, until the Disability be removed, or a President shall be elected. The President shall, at stated Times, receive for his Services, a Compensation, which shall neither be en-creased nor diminished during the Period for which he shall have been elected, and he shall not receive within that Period any other Emolument from the United States, or any of them. Before he enter on the Execution of his Office, he shall take the following Oath or Affirmation: \" I do solemnly swear (or affirm) that I will faithfully execute the Office of President of the United States, and will to the best of my Ability, preserve, protect and defend the Constitution of the United States.\" Section 2. The President shall be Commander in Chief of the Army and Navy of the United States, and of the Militia of the several States, when called into the actual Service of the United States ; he may require the Opinion, in writing, of the principal Officer in each of the executive Departments, upon any Subject relating to the Duties of their respective Offices, and he shall have Power to grant Reprieves and Pardons for Offences against the United States, except in Cases of Impeachment. He shall have Power, by and with the Advice and Consent of the Senate, to make Treaties, provided two thirds of the Senators present concur;\\n- Want of right to regulate foreign Commerce. V. Virtual omission of power to alter the existing articles. Consult Bancroft's U. S., 1sted., IX., 436; cen. ed., VI., 25 ; last ed., V., 200; Hildreth's U. S., III. 266; Brothingham's Rise, etc., 569; Story's Cons. U. S, I., 209—251; Curtis' Constitution, I., 114 ; Prince's The Articles of Confederation vs. the' Constitution. ARTICLES OF CONFEDERATION—1777. To all to whom these Presents shall come, we the undersigned Delegates of the States affixed to our Names, send greeting. Whereas the Delegates of the United States of America in Congress assembled did on the fifteenth day of November in the Year of our Lord One Thousand Seven Hundred and Seventyseven, and in the Second Year of the Independence of America agree to certain articles of Confederation and perpetual Union between the States of Newhampshire, Massachusetts-bay, Rhodeisland and Providence Plantations, Connecticut, New York, New Jersey, Pennsylvania, Delaware, Maryland, Virginia, North-Carolina, South-Carolina and Georgia in the Words following, viz. \"Articles of Confederation and perpetual Union between the States of Newhampshire, Massachusetts-bay, Rhodeisland and Providence Plantations, Connecticut, Nezu-York, New-Jersey, Pennsylvania, Delaware, Maryland, Virginia, North-Carolina, South-Carolina and Georgia. ARTICLE I. The stile of this confederacy shall be \"The United States of America.\" Article II. Each State retains its sovereignty, freedom and independence, and every power, jurisdiction and right, which is not by this confederation expressly delegated to the United States, in Congress assembled. Article III.\\n- Whenever the legislative or executive authority or lawful agent of any State in controversy with another shall present a petition to Congress, stating the matter in question and praying for a hearing, notice thereof shall be given by order of Congress to the legislative or executive authority of the other State in controversy, and a day assigned for the appearance of the parties by their lawful agents, who shall then be directed to appoint by joint consent, commissioners or judges to constitute a court for hearing and determining the matter in question: but if they cannot agree, Congress shall name three persons out of each of the United States, and from the list of such persons each party shall alternately strike out one, the petitioners beginning, until the number shall be reduced to thirteen ; and from that number not less than seven, nor more than nine names as Congress shall direct, shall in the presence of Congress be drawn out by lot, and the persons whose names shall be so drawn or any five of them, shall be commissioners or judges, to hear and finally determine the controversy, so always as a major part of the judges who shall hear the cause shall agree in the determination: and if either party shall neglect to attend at the day appointed, without showing reasons, which Congress shall judge sufficient, or being present shall refuse to strike, the Congress shall proceed to nominate three persons out of each State, and the Secretary of Congress shall strike in behalf of such party absent or refusing; and the judgment and sentence of the court to be appointed, in the manner before prescribed, shall be final and conclusive ;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        2176,
+        -1632
+      ],
+      "id": "144f103f-a3e4-473e-b2c7-2d3501254476",
+      "name": "News sent through Gmail",
+      "webhookId": "6d9fa7c0-0abc-4b47-b724-6c9db211062a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xCc6kSiGtUG0HRXO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "advanced": true,
+        "mergeByFields": {
+          "values": [
+            {}
+          ]
+        },
+        "joinMode": "keepEverything",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1168,
+        -1840
+      ],
+      "id": "da1d3bf6-246a-4f74-b73e-e65ae22bbfce",
+      "name": "George+News API's",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "amount": 8
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        624,
+        -1952
+      ],
+      "id": "30caa587-cd76-4d1f-8ac7-1c243438bcaa",
+      "name": "Wait",
+      "webhookId": "07779a1d-7385-4fcb-b827-cbe7086f6d26",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "advanced": true,
+        "mergeByFields": {
+          "values": [
+            {
+              "field1": "glenn_top3",
+              "field2": "george_top3"
+            }
+          ]
+        },
+        "joinMode": "keepEverything",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1392,
+        -1664
+      ],
+      "id": "41251297-6590-410b-a092-7277504f4eea",
+      "name": "George+News+Glenn News API's",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build Context Bundle (merge news/glenn/george to one readable blob)\n\nconst pickText = (x) => {\n  if (!x) return '';\n  if (typeof x === 'string') return x;\n  return x.text || x.page_content || x.content || x.description || '';\n};\n\nconst norm = (arr) =>\n  (Array.isArray(arr) ? arr : [])\n    .map(pickText)\n    .map(t => String(t).replace(/\\s+/g, ' ').trim())\n    .filter(Boolean);\n\nlet news = [], glenn = [], george = [];\nlet topic = '';\n\nfor (const item of items) {\n  const j = item.json || {};\n  if (!topic) topic = j.topic || j.query || j.keyword || '';\n  if (j.news_top3)   news.push(...norm(j.news_top3));\n  if (j.glenn_top3)  glenn.push(...norm(j.glenn_top3));\n  if (j.george_top3) george.push(...norm(j.george_top3));\n}\n\nconst dedupe = (arr) => Array.from(new Set(arr));\nnews = dedupe(news); glenn = dedupe(glenn); george = dedupe(george);\n\nconst MAX_PER = 3, MAX_CHARS_EACH = 4000;\nconst clip = (arr) => arr.slice(0, MAX_PER).map(s => s.slice(0, MAX_CHARS_EACH));\nnews = clip(news); glenn = clip(glenn); george = clip(george);\n\nconst section = (label, arr) => arr.length ? `${label}:\\n- ${arr.join('\\n- ')}` : '';\nconst context_bundle = [section('News', news), section('Glenn', glenn), section('George', george)]\n  .filter(Boolean).join('\\n\\n');\n\nconst bundle_char_len = context_bundle.length;\n\nreturn [{\n  json: {\n    topic: topic || '(no topic)',\n    context_bundle,\n    bundle_char_len,\n    news_text: news.join('\\n\\n'),\n    glenn_text: glenn.join('\\n\\n'),\n    george_text: george.join('\\n\\n'),\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        -1712
+      ],
+      "id": "32d3a624-781f-45fa-912d-a514ceb297e3",
+      "name": "Build Context Bundle",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "amount": 8
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        624,
+        -1760
+      ],
+      "id": "316b48c9-1b3b-43ad-8828-74013b73254a",
+      "name": "Wait1",
+      "webhookId": "07779a1d-7385-4fcb-b827-cbe7086f6d26",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "amount": 8
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        624,
+        -1568
+      ],
+      "id": "7885c21d-b2d1-463b-b3a7-63015dde0999",
+      "name": "Wait2",
+      "webhookId": "07779a1d-7385-4fcb-b827-cbe7086f6d26",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "https://newsdata.io/api/1/news",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={\n  \"apikey\": \"pub_68ed551931754e1492166244c6392ea6\",\n  \"q\": \"{{$json.topic}}\",\n  \"language\": \"en\",\n  \"category\": \"politics\"\n}\n\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -528,
+        -448
+      ],
+      "id": "674b10dd-46a6-4bc6-883f-638299c6253e",
+      "name": "News API"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://atmm3rnx33.us-west-2.awsapprunner.com/search/books",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n    \"query\": \"={{$json.vector_q}}\",\n    \"k\": 10,\n    \"t\": 0.8,\n    \"fetch_k\": 10,\n    \"filter\": {},\n    \"include_summaries\": false,\n    \"namespace\": \"glenn_content\",\n    \"include_llm_response\": true\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -528,
+        -640
+      ],
+      "id": "062574a3-3b9c-4aa9-9a38-dea65e84c1bd",
+      "name": "Glenn API",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "ul8u9lpZvKs3mGJI",
+          "name": "Bearer Auth account"
+        },
+        "httpHeaderAuth": {
+          "id": "GJuTHC97GfUlbDzQ",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://atmm3rnx33.us-west-2.awsapprunner.com/search/books",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"query\": \"={{$json.vector_q}}\",\n  \"k\": 10,\n  \"t\": 0.8,\n  \"fetch_k\": 10,\n  \"filter\": {},\n  \"include_summaries\": false,\n  \"namespace\": \"indexed_content\",\n  \"include_llm_response\": true\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -528,
+        -272
+      ],
+      "id": "180e7acb-2b66-4550-ae4f-f576cb09f5d7",
+      "name": "George API",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "ul8u9lpZvKs3mGJI",
+          "name": "Bearer Auth account"
+        },
+        "httpHeaderAuth": {
+          "id": "GJuTHC97GfUlbDzQ",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Grab the single incoming item in \"Run Once for All Items\" mode\nconst input = $input.all()[0]?.json ?? {};\n\n// Preserve topic from upstream\nconst topic = input.ctx_topic ?? input.topic ?? input.query ?? '';\n\n// NewsData.io payload: articles are in `results`\nconst arr = input.results ?? input.articles ?? input.items ?? [];\n\nreturn arr.map((a, i) => ({\n  json: {\n    ...a,\n    _row: i,\n    provider: 'news',\n    topic,\n    ctx_topic: topic,\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        -448
+      ],
+      "id": "feeca008-64c8-41f2-a6f4-fa4a16bcddb1",
+      "name": "Split Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rank & Select Top 3 Articles (citation-friendly)\n// INPUT: many items (after Split Items) with fields:\n//   title, url, source, source_priority, date, duplicate\n// OPTIONAL: carry your loop topic on each item as ctx_topic or topic\n// OUTPUT: ONE item:\n//   - glanceable \"Article 1/2/3\" columns\n//   - top_articles: full objects incl. title, url, source, date, duplicate, source_priority, _score\n//   - citations: [{title,url,source,date}] to cite easily\n\nfunction norm(s='') {\n  return String(s).toLowerCase().replace(/[^a-z0-9\\s]+/g, ' ').replace(/\\s+/g, ' ').trim();\n}\nfunction tokenize(s='') {\n  const stop = new Set(['the','a','an','of','and','or','to','for','in','on','at','by','with','from','as','is','are','be','was','were','this','that','it','its','into','about','over','after','before']);\n  return norm(s).split(' ').filter(t => t && !stop.has(t));\n}\nfunction overlapScore(topicTokens, titleTokens) {\n  if (!topicTokens.length || !titleTokens.length) return 0;\n  const topicSet = new Set(topicTokens);\n  let hits = 0;\n  for (const t of titleTokens) if (topicSet.has(t)) hits++;\n  const jacc = hits / new Set([...topicTokens, ...titleTokens]).size; // small normalization\n  return hits + 2*jacc; // mix of raw overlap + jaccard-ish\n}\nfunction recencyBoost(dateStr) {\n  if (!dateStr) return 1.0;\n  const t = new Date(dateStr).getTime();\n  if (!isFinite(t)) return 1.0;\n  const hrs = Math.max(0, (Date.now() - t) / 3600000);\n  // half-life ≈ 24h\n  return Math.exp(-Math.log(2) * hrs / 24);\n}\nfunction qualityBoost(sourcePriority) {\n  const sp = (sourcePriority == null) ? 999999 : Number(sourcePriority);\n  return 1 / Math.log1p(sp); // lower priority number => larger boost\n}\n\n// Pull topic if you carried it through the loop\nconst firstJson = $input.first()?.json || {};\nconst topic = firstJson.ctx_topic || firstJson.topic || '';\nconst topicTokens = tokenize(topic);\n\n// Collect articles\nconst rows = $input.all().map(i => i.json).map(a => ({\n  title: a.title || '',\n  url: a.url || a.link || '',\n  source: a.source || a.source_name || a.source_id || '',\n  source_priority: (a.source_priority != null) ? Number(a.source_priority) : null,\n  date: a.date || a.pubDate || null,\n  duplicate: !!a.duplicate\n}));\n\n// Score\nconst scored = rows.map((a, idx) => {\n  const titleTokens = tokenize(a.title);\n  let score = overlapScore(topicTokens, titleTokens);\n  if (topic && norm(a.title).includes(norm(topic))) score += 2; // exact phrase bonus\n  score *= recencyBoost(a.date);\n  score *= qualityBoost(a.source_priority);\n  if (a.duplicate) score *= 0.75;\n\n  return { ...a, _score: Number(score.toFixed(6)), _rankIndex: idx };\n});\n\n// Sort: prefer non-duplicate, higher score, better outlet, newer date\nscored.sort((a,b) => {\n  if (!!a.duplicate !== !!b.duplicate) return a.duplicate ? 1 : -1;\n  if (b._score !== a._score) return b._score - a._score;\n  const asp = (a.source_priority == null) ? 999999 : a.source_priority;\n  const bsp = (b.source_priority == null) ? 999999 : b.source_priority;\n  if (asp !== bsp) return asp - bsp;\n  const ta = a.date ? new Date(a.date).getTime() : 0;\n  const tb = b.date ? new Date(b.date).getTime() : 0;\n  return tb - ta;\n});\n\n// Pick top 3 (or fewer if less available)\nconst top = scored.slice(0, 3);\n\n// Build citation-friendly array: keep title, url, source, date\nconst citations = top.map(x => ({\n  title: x.title,\n  url: x.url,\n  source: x.source,\n  date: x.date\n}));\n\n// Safe columns for quick viewing\nconst safe = i => top[i] || { title:'(none)', url:'', source:'', date:null, _score:0 };\nconst a1 = safe(0), a2 = safe(1), a3 = safe(2);\n\nreturn [{\n  json: {\n    topic,\n    total_candidates: rows.length,\n\n    // glanceable columns\n    \"Article 1 • Title\": a1.title, \"Article 1 • URL\": a1.url, \"Article 1 • Source\": a1.source, \"Article 1 • Date\": a1.date, \"Article 1 • Score\": a1._score,\n    \"Article 2 • Title\": a2.title, \"Article 2 • URL\": a2.url, \"Article 2 • Source\": a2.source, \"Article 2 • Date\": a2.date, \"Article 2 • Score\": a2._score,\n    \"Article 3 • Title\": a3.title, \"Article 3 • URL\": a3.url, \"Article 3 • Source\": a3.source, \"Article 3 • Date\": a3.date, \"Article 3 • Score\": a3._score,\n\n    // structured arrays for downstream use\n    top_articles: top,     // full objects incl. source_priority, duplicate, _score\n    citations             // minimal fields to cite (title, url, source, date)\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -144,
+        -448
+      ],
+      "id": "990317d1-3d7b-4739-9023-1d05f7ff6a6a",
+      "name": "Rank & Select Top 3 Articles"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build Context Bundle (robust, provider-agnostic)\n// INPUT: ~3 items, each is ONE json object with 3 best sources from:\n//   - News ranker => { top_articles: [...] }\n//   - Glenn/George rankers => { sources: [...] } OR { source_1, source_2, source_3 }\n// No provider tag required (auto-detect).\n//\n// OUTPUT: ONE item with:\n//   topic, sections:{news[], glenn[], george[]}, citations[], counts{}, context_bundle (string)\n\nconst MAX_TEXT_CHARS = 900;\n\nfunction clean(s) { return (s==null) ? '' : String(s).replace(/\\s+/g,' ').trim(); }\nfunction excerpt(s, n = MAX_TEXT_CHARS) {\n  const t = clean(s);\n  return t.length <= n ? t : t.slice(0, n-1) + '…';\n}\nfunction fmtDate(d) {\n  if (!d) return '';\n  const t = new Date(d);\n  return isFinite(t) ? t.toISOString().slice(0,19).replace('T',' ') : String(d);\n}\nfunction ensureArray(x){ return Array.isArray(x) ? x : (x ? [x] : []); }\n\n// Try to recover the topic carried through your loop\nconst allItems = $input.all().map(i => i.json || {});\nconst topic = clean(\n  (allItems.find(x => x.topic)?.topic) ??\n  (allItems.find(x => x.ctx_topic)?.ctx_topic) ?? ''\n);\n\n// Buckets\nconst news   = [];\nconst glenn  = [];\nconst george = [];\nconst citations = [];\n\n// Infer which provider an item came from\nfunction guessProvider(obj){\n  // Explicit flags if you added them\n  if (obj.provider) return String(obj.provider).toLowerCase();\n\n  // Clear News shape\n  if (Array.isArray(obj.top_articles)) return 'news';\n\n  // For Glenn/George we can sniff metadata.author if present\n  const arr =\n    Array.isArray(obj.sources) ? obj.sources :\n    [obj.source_1, obj.source_2, obj.source_3].filter(Boolean);\n\n  // If nothing else, call it \"text\"\n  if (!arr.length) return 'text';\n\n  const m0 = arr[0]?.metadata || {};\n  const authorMeta = (m0.author || '').toLowerCase();\n  if (authorMeta.includes('glenn')) return 'glenn';\n  if (authorMeta.includes('george')) return 'george';\n\n  // Also check llm_response.author if present\n  const a0 = (arr[0]?.llm_response?.author || '').toLowerCase();\n  if (a0.includes('glenn')) return 'glenn';\n  if (a0.includes('george')) return 'george';\n\n  // fallback\n  return 'text';\n}\n\n// Normalize one item into the right bucket(s)\nfunction takeFromItem(obj){\n  const provider = guessProvider(obj);\n\n  if (provider === 'news') {\n    const arr = ensureArray(obj.top_articles).slice(0, 3);\n    for (const a of arr) {\n      const row = {\n        provider: 'news',\n        title: clean(a.title),\n        url: clean(a.url || a.link),\n        source: clean(a.source || a.source_name || a.source_id),\n        date: clean(a.date || a.pubDate),\n        score: (a._score != null) ? Number(a._score) : null,\n        duplicate: !!a.duplicate,\n        source_priority: (a.source_priority != null) ? Number(a.source_priority) : null,\n      };\n      news.push(row);\n      citations.push({ title: row.title, url: row.url, source: row.source, date: row.date });\n    }\n    return;\n  }\n\n  // Glenn/George (or generic “text”)\n  let arr = [];\n  if (Array.isArray(obj.sources)) arr = obj.sources;\n  else arr = [obj.source_1, obj.source_2, obj.source_3].filter(Boolean);\n\n  const norm = arr.slice(0,3).map(s => {\n    const title  = clean(s.title || s.llm_response?.title);\n    const author = clean(s.author || s.metadata?.author || s.llm_response?.author);\n    const rel    = Number(s.relevancyScore ?? s.llm_response?.relevancyScore ?? 0);\n    const page   = clean(s.page_content);\n    const meta   = s.metadata || {};\n\n    // Best-effort URL for citation\n    let citeUrl = '';\n    const urls = []\n      .concat(meta.s3_url || [])\n      .concat(meta.s3_txt_url || [])\n      .concat(meta.s3_img_urls || []);\n    if (Array.isArray(urls) && urls.length) citeUrl = clean(urls[0]);\n    else if (typeof urls === 'string' && urls) citeUrl = clean(urls);\n\n    citations.push({ title, url: citeUrl, source: provider, author });\n\n    return { provider, title, author, relevancyScore: rel, page_content: page, llm_response: s.llm_response || {}, metadata: meta };\n  });\n\n  if (provider === 'glenn') glenn.push(...norm);\n  else if (provider === 'george') george.push(...norm);\n  else {\n    // If we couldn't identify, prefer to put into \"george\" to keep sections non-empty,\n    // or change this to push into \"glenn\" as you prefer.\n    george.push(...norm);\n  }\n}\n\n// Pull from every merged item\nfor (const obj of allItems) takeFromItem(obj);\n\n// Build printable sections\nfunction newsSection(rows){\n  if (!rows.length) return '';\n  const out = [];\n  out.push(`### News (Top ${rows.length})`);\n  rows.forEach((a,i)=>{\n    out.push(`- ${i+1}. ${a.title} — ${a.source}${a.date ? ` (${fmtDate(a.date)})` : ''}`);\n    if (a.url) out.push(`  ${a.url}${a.score != null ? `  [score:${a.score}]` : ''}`);\n  });\n  return out.join('\\n');\n}\nfunction llmSection(label, rows){\n  if (!rows.length) return '';\n  const out = [];\n  out.push(`### ${label} (Top ${rows.length})`);\n  rows.forEach((s,i)=>{\n    const rel = (s.relevancyScore != null) ? ` [relevancy:${s.relevancyScore}]` : '';\n    out.push(`- ${i+1}. ${s.title}${s.author ? ` — ${s.author}` : ''}${rel}`);\n    if (s.page_content) out.push(`  Excerpt: ${excerpt(s.page_content)}`);\n  });\n  return out.join('\\n');\n}\n\n// Compose bundle\nconst parts = [];\nif (topic) parts.push(`# Topic: ${topic}`);\nif (news.length)   parts.push(newsSection(news));\nif (glenn.length)  parts.push(llmSection('Glenn', glenn));\nif (george.length) parts.push(llmSection('George', george));\n\nconst context_bundle = parts.filter(Boolean).join('\\n\\n---\\n\\n');\n\n// Counts\nconst counts = {\n  news: news.length,\n  glenn: glenn.length,\n  george: george.length,\n  total: news.length + glenn.length + george.length\n};\n\nreturn [{\n  json: {\n    topic,\n    counts,\n    sections: { news, glenn, george },\n    citations,\n    context_bundle\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        -208
+      ],
+      "id": "ec978fee-8015-4fac-b021-0dc1d3e41b11",
+      "name": "Context Bundle"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rank by llm_response.relevancyScore and return ONE item with the top 3\n// Works for both Glenn and George API outputs.\n// Expected incoming rows have keys: page_content, llm_response, metadata.\n\nfunction parseMaybeJson(v) {\n  if (v == null) return null;\n  if (typeof v === 'object') return v;\n  try { return JSON.parse(String(v)); } catch { return null; }\n}\n\nconst rows = $input.all().map(it => it.json || {});\n\n// Normalize each row\nconst normalized = rows.map((r, idx) => {\n  // llm_response may be an object or a JSON string\n  const llmRaw = r.llm_response ?? r.llm ?? null;\n  const llm = typeof llmRaw === 'object' ? llmRaw : parseMaybeJson(llmRaw) || {};\n  const meta = r.metadata ?? {};\n  const rc = llm.relevancyScore ?? llm.relevancy_score ?? llm.score ?? 0;\n\n  // Pull a couple of handy fields for quick viewing/citation\n  const title  = llm.title  ?? meta.title  ?? '';\n  const author = meta.author ?? llm.author ?? '';\n\n  return {\n    idx,\n    relevancyScore: Number(rc) || 0,\n    title,\n    author,\n    page_content: r.page_content ?? r.content ?? '',\n    llm_response: llm,   // keep full llm_response object\n    metadata: meta       // keep full metadata object\n  };\n});\n\n// Sort by relevancyScore (high → low) and keep top 3\nconst top3 = normalized\n  .sort((a,b) => b.relevancyScore - a.relevancyScore)\n  .slice(0, 3);\n\n// Pad if fewer than 3\nwhile (top3.length < 3) {\n  top3.push({\n    idx: -1,\n    relevancyScore: 0,\n    title: '(none)',\n    author: '',\n    page_content: '',\n    llm_response: {},\n    metadata: {}\n  });\n}\n\n// Build a single, clear JSON object with 3 “sections”\nconst [s1, s2, s3] = top3;\n\nreturn [{\n  json: {\n    total_candidates: normalized.length,\n\n    // Compact columns to make it easy to see the winners at a glance\n    \"Source 1 • Title\": s1.title,\n    \"Source 1 • Author\": s1.author,\n    \"Source 1 • Relevancy\": s1.relevancyScore,\n    \"Source 2 • Title\": s2.title,\n    \"Source 2 • Author\": s2.author,\n    \"Source 2 • Relevancy\": s2.relevancyScore,\n    \"Source 3 • Title\": s3.title,\n    \"Source 3 • Author\": s3.author,\n    \"Source 3 • Relevancy\": s3.relevancyScore,\n\n    // Full, structured payloads for citation / downstream use\n    source_1: {\n      rank: 1,\n      relevancyScore: s1.relevancyScore,\n      title: s1.title,\n      author: s1.author,\n      page_content: s1.page_content,\n      llm_response: s1.llm_response,\n      metadata: s1.metadata\n    },\n    source_2: {\n      rank: 2,\n      relevancyScore: s2.relevancyScore,\n      title: s2.title,\n      author: s2.author,\n      page_content: s2.page_content,\n      llm_response: s2.llm_response,\n      metadata: s2.metadata\n    },\n    source_3: {\n      rank: 3,\n      relevancyScore: s3.relevancyScore,\n      title: s3.title,\n      author: s3.author,\n      page_content: s3.page_content,\n      llm_response: s3.llm_response,\n      metadata: s3.metadata\n    },\n\n    // Also provide an array form if you want to iterate later\n    sources: [\n      {\n        rank: 1,\n        relevancyScore: s1.relevancyScore,\n        title: s1.title,\n        author: s1.author,\n        page_content: s1.page_content,\n        llm_response: s1.llm_response,\n        metadata: s1.metadata\n      },\n      {\n        rank: 2,\n        relevancyScore: s2.relevancyScore,\n        title: s2.title,\n        author: s2.author,\n        page_content: s2.page_content,\n        llm_response: s2.llm_response,\n        metadata: s2.metadata\n      },\n      {\n        rank: 3,\n        relevancyScore: s3.relevancyScore,\n        title: s3.title,\n        author: s3.author,\n        page_content: s3.page_content,\n        llm_response: s3.llm_response,\n        metadata: s3.metadata\n      }\n    ]\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        -640
+      ],
+      "id": "0c16a348-06f5-4b3d-8820-3dca388f4ed2",
+      "name": "Rank & Select Top 3 Glenn API"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rank by llm_response.relevancyScore and return ONE item with the top 3\n// Works for both Glenn and George API outputs.\n// Expected incoming rows have keys: page_content, llm_response, metadata.\n\nfunction parseMaybeJson(v) {\n  if (v == null) return null;\n  if (typeof v === 'object') return v;\n  try { return JSON.parse(String(v)); } catch { return null; }\n}\n\nconst rows = $input.all().map(it => it.json || {});\n\n// Normalize each row\nconst normalized = rows.map((r, idx) => {\n  // llm_response may be an object or a JSON string\n  const llmRaw = r.llm_response ?? r.llm ?? null;\n  const llm = typeof llmRaw === 'object' ? llmRaw : parseMaybeJson(llmRaw) || {};\n  const meta = r.metadata ?? {};\n  const rc = llm.relevancyScore ?? llm.relevancy_score ?? llm.score ?? 0;\n\n  // Pull a couple of handy fields for quick viewing/citation\n  const title  = llm.title  ?? meta.title  ?? '';\n  const author = meta.author ?? llm.author ?? '';\n\n  return {\n    idx,\n    relevancyScore: Number(rc) || 0,\n    title,\n    author,\n    page_content: r.page_content ?? r.content ?? '',\n    llm_response: llm,   // keep full llm_response object\n    metadata: meta       // keep full metadata object\n  };\n});\n\n// Sort by relevancyScore (high → low) and keep top 3\nconst top3 = normalized\n  .sort((a,b) => b.relevancyScore - a.relevancyScore)\n  .slice(0, 3);\n\n// Pad if fewer than 3\nwhile (top3.length < 3) {\n  top3.push({\n    idx: -1,\n    relevancyScore: 0,\n    title: '(none)',\n    author: '',\n    page_content: '',\n    llm_response: {},\n    metadata: {}\n  });\n}\n\n// Build a single, clear JSON object with 3 “sections”\nconst [s1, s2, s3] = top3;\n\nreturn [{\n  json: {\n    total_candidates: normalized.length,\n\n    // Compact columns to make it easy to see the winners at a glance\n    \"Source 1 • Title\": s1.title,\n    \"Source 1 • Author\": s1.author,\n    \"Source 1 • Relevancy\": s1.relevancyScore,\n    \"Source 2 • Title\": s2.title,\n    \"Source 2 • Author\": s2.author,\n    \"Source 2 • Relevancy\": s2.relevancyScore,\n    \"Source 3 • Title\": s3.title,\n    \"Source 3 • Author\": s3.author,\n    \"Source 3 • Relevancy\": s3.relevancyScore,\n\n    // Full, structured payloads for citation / downstream use\n    source_1: {\n      rank: 1,\n      relevancyScore: s1.relevancyScore,\n      title: s1.title,\n      author: s1.author,\n      page_content: s1.page_content,\n      llm_response: s1.llm_response,\n      metadata: s1.metadata\n    },\n    source_2: {\n      rank: 2,\n      relevancyScore: s2.relevancyScore,\n      title: s2.title,\n      author: s2.author,\n      page_content: s2.page_content,\n      llm_response: s2.llm_response,\n      metadata: s2.metadata\n    },\n    source_3: {\n      rank: 3,\n      relevancyScore: s3.relevancyScore,\n      title: s3.title,\n      author: s3.author,\n      page_content: s3.page_content,\n      llm_response: s3.llm_response,\n      metadata: s3.metadata\n    },\n\n    // Also provide an array form if you want to iterate later\n    sources: [\n      {\n        rank: 1,\n        relevancyScore: s1.relevancyScore,\n        title: s1.title,\n        author: s1.author,\n        page_content: s1.page_content,\n        llm_response: s1.llm_response,\n        metadata: s1.metadata\n      },\n      {\n        rank: 2,\n        relevancyScore: s2.relevancyScore,\n        title: s2.title,\n        author: s2.author,\n        page_content: s2.page_content,\n        llm_response: s2.llm_response,\n        metadata: s2.metadata\n      },\n      {\n        rank: 3,\n        relevancyScore: s3.relevancyScore,\n        title: s3.title,\n        author: s3.author,\n        page_content: s3.page_content,\n        llm_response: s3.llm_response,\n        metadata: s3.metadata\n      }\n    ]\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        -272
+      ],
+      "id": "c32a63dc-602e-499d-b6cd-aba9697976b1",
+      "name": "Rank & Select Top 3 George API"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        160,
+        -448
+      ],
+      "id": "d6b47609-3a8e-42a5-8e5e-3ce129d416de",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Take one row with \"Topic 1/2/3\" and emit 3 items\nconst row = $input.first().json || {};\nconst labels = ['Topic 1', 'Topic 2', 'Topic 3'];\nconst out = [];\n\nlabels.forEach((k, idx) => {\n  const t = (row[k] || '').toString().trim();\n  if (t && t !== '(none)') {\n    out.push({ json: { topic: t, topic_label: k, rank: idx + 1 } });\n  }\n});\n\n// Fallback if nothing found\nif (!out.length) out.push({ json: { topic: 'US politics', topic_label: 'Fallback', rank: 1 } });\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1040,
+        -144
+      ],
+      "id": "425b062a-2a75-49d5-a3b3-1b8a6b35a3d1",
+      "name": "Separate into 3 topic items"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "---\n\n# Prompt: Glenn-Style Breaking News Article (Topic Bundle → One Article)\n\n**You are writing *one* complete breaking-news article in the voice and style of Glenn Beck.**\nYou are given a single context bundle that corresponds to **one topic**. The bundle contains three curated clusters of sources:\n\n* **news** (current reporting and facts to cite),\n* **glenn** (Glenn’s writings: voice, framing, moral logic, structure; cite when appropriate),\n* **george** (foundational/historical texts: use to inform principles and constitutional framing; do **not** cite).\n\nYou must **read the provided URLs** whenever tool access is available. If a page is inaccessible, rely on the metadata in the bundle and narrate carefully without inventing specifics.\n\n---\n\n## Your goals\n\n* Produce a **900–1100 word** article (soft target; ±5% OK if necessary for clarity).\n* Title and structure the piece like a published Glenn Beck column:\n\n  * **H1 title** (`# Title of the Article`) — strong, specific, not a topic tag.\n  * **H2 subheadings** (`##`) — **descriptive and original** (do **not** reuse “news”, “glenn”, “george”, or source names as headings).\n  * Optional concluding H2: **“What This Means for America”** if it fits the topic.\n* Maintain Glenn’s **voice and worldview** (moral clarity, warnings about centralization, constitutionalism, limited government, first principles).\n* Use **news** sources for dated, attributable facts.\n* Use **glenn** sources to model tone, style, and framing; cite if they explicitly ground a claim or quotation.\n* Use **george** to shape the philosophical spine only (no citations; paraphrase ideas without naming those works or authors).\nGot it — you’ll want a short **meta instruction** inside the prompt that clarifies *where* the sources are coming from, so the AI knows how to treat them. Here’s a clean snippet you can paste into your master prompt:\n\n---\n\n### Source definitions (do not mention these categories in the article)\n\n***news**: Live, breaking news reporting pulled from NewsAPI (citations required).\n* **glenn**: Glenn Beck’s own books and articles (used for style, tone, worldview; cite only if directly quoting or referencing).\n* **george**: Founding-era and historical texts (used for principles and philosophical grounding; **never cited** directly).\n\n---\n\nWould you like me to **re-insert this directly into the full prompt I gave you earlier**, so it’s a single, ready-to-paste version?\n\n---\n\n## Reading the sources\n\n1. **Open and read** the `url` for each item in `sections.news` (and, when useful, in `sections.glenn`) to ground the article.\n2. Extract **verifiable details** (who/what/when/where/why/quotes) from **news** items.\n3. If a URL is blocked or unavailable, use the item’s metadata in the bundle; **do not invent** missing facts.\n4. Prefer **non-duplicate** news items and higher quality sources (the bundle may include a `duplicate` flag and `source_priority`—use them as hints).\n\n---\n\n## Sourcing & attribution\n\n* **Cite only news and Glenn sources** when you rely on them for facts or quoted language:\n\n  * Inline example: “As reported by [Outlet Name](link), …”\n  * Use natural language citations (no footnotes, no numeric brackets).\n* **Do not cite** the “george” items; let their ideas inform your framing, not your references.\n* Keep quotations short and accurate; clearly attribute them.\n\n---\n\n## Critical constraints\n\n* **Do not introduce or fabricate facts** not present in the provided bundle or the opened URLs.\n* **Use only** the given bundle and opened links (no external knowledge).\n* **Respect topic scope** and keep sections coherent and sequential.\n* **Total content length** should be **900–1100 words** (soft target).\n* **Valid Markdown** only (H1 for the title, H2 for subsections, paragraphs/quotes/links).\n* **No bullet lists** unless a short list is unavoidable for clarity; prioritize narrative flow.\n* Avoid filler or repetition; don’t “echo” headings as first sentences.\n* If any source material is ambiguous, say so and explain what is known/unknown—**do not invent**.\n\n---\n\n## Structure blueprint (adapt; don’t force)\n\n* `# {Strong, specific headline that previews the thesis}`\n* `## {What changed or is breaking right now}`\n  Concise summary of the new development, supported by **news** citations.\n* `## {Why this matters immediately}`\n  Near-term consequences; who is affected; ground in **news** details.\n* `## {The pattern behind it}`\n  Connect to ongoing trends; here you can channel **Glenn’s framing** (cite Glenn if you reference a specific idea from his writing).\n* `## {First principles and the republic}`\n  Constitutional/first-principles vantage (informed by **george** ideas; **no citations**).\n* `## What This Means for America` *(optional, keep if it fits)*\n  Clear takeaways, prudent action/awareness, sober tone—no fear-mongering.\n\n> You may **rename and reorder** subsections as needed. Subheads must be **meaningful, varied, and specific** to the story (e.g., “White House Rebrands the Pentagon: What Actually Changes,” not “Glenn” or “News”).\n\n---\n\n## Input format (what you receive)\n\nYou will receive JSON like:\n\n```json\n{\n  \"topic\": \"<topic string>\",\n  \"counts\": { \"news\": 3, \"glenn\": 3, \"george\": 3, \"total\": 9 },\n  \"sections\": {\n    \"news\":   [ { \"title\": \"...\", \"url\": \"...\", \"source\": \"...\", \"date\": \"...\", \"duplicate\": false, \"source_priority\": 231 } ],\n    \"glenn\":  [ { \"title\": \"...\", \"url\": \"...\", \"author\": \"Glenn Beck\" } ],\n    \"george\": [ { \"title\": \"...\", \"url\": \"...\", \"author\": \"...\" } ]\n  },\n  \"citations\": [ { \"title\": \"...\", \"url\": \"...\", \"source\": \"glenn\", \"author\": \"Glenn Beck\" } ]\n}\n```\n\nTreat this as your **complete** research set.\n\n---\n\n## Output requirements\n\n* A **single Markdown article** for this topic bundle.\n* **H1 title** and **H2 subsections** as described.\n* Inline, natural-language citations for any facts/quotes from **news** (and **glenn** when quoting/referencing a specific text).\n* **No mention** of “george,” “glenn section,” “news section,” or provider labels in headings or body.\n\n---\n\n## Execution checklist (do this before writing)\n\n1. Parse `topic` and skim all items in `sections.news`, then **open and read** their URLs (if tools available).\n2. Identify duplicates or low-value hits; prefer higher-signal reporting.\n3. Extract the key verified timeline and actors.\n4. Skim **glenn** items/URLs to capture tone, argumentative scaffolding, and any specific lines you might cite.\n5. Note **george** principles that fit this case; use them for moral/constitutional framing (no citations).\n6. Draft the article to **900–1100 words** with strong H1 and **distinct, descriptive** H2s.\n\n---\n\n### Important style reminders\n\n* Glenn’s tone: direct, morally anchored, historically aware, wary of centralized authority, protective of individual liberty and local institutions.\n* Confident but fair; avoid ad hominem; let facts lead and analysis clarify.\n* Subheads must **not** simply restate the topic or provider names—make them **reader-useful** signposts.\n\n---\n\n**Now write the article.**\n",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        624,
+        -1328
+      ],
+      "id": "5837dd68-ab32-4b0b-a4b3-1b379980c0d1",
+      "name": "Glenn AI Agent",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4-turbo",
+          "mode": "list",
+          "cachedResultName": "gpt-4-turbo"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        608,
+        -1120
+      ],
+      "id": "4a3a36ca-96d6-403f-984c-addf90191ce5",
+      "name": "OpenAI Chat Model1",
+      "credentials": {
+        "openAiApi": {
+          "id": "AvX6swAILmUuCIid",
+          "name": "OpenAi account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "chatgpt-4o-latest",
+          "mode": "list",
+          "cachedResultName": "CHATGPT-4O-LATEST"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "---\n\n# Prompt: Glenn-Style Breaking News Article (Topic Bundle → One Article)\n\n**You are writing *one* complete breaking-news article in the voice and style of Glenn Beck.**\nYou are given a single context bundle that corresponds to **one topic**. The bundle contains three curated clusters of sources:\n\n* **news** (current reporting and facts to cite),\n* **glenn** (Glenn’s writings: voice, framing, moral logic, structure; cite when appropriate),\n* **george** (foundational/historical texts: use to inform principles and constitutional framing; do **not** cite).\n\nYou must **read the provided URLs** whenever tool access is available. If a page is inaccessible, rely on the metadata in the bundle and narrate carefully without inventing specifics.\n\n---\n\n## Your goals\n\n* Produce a **900–1100 word** article (soft target; ±5% OK if necessary for clarity).\n* Title and structure the piece like a published Glenn Beck column:\n\n  * **H1 title** (`# Title of the Article`) — strong, specific, not a topic tag.\n  * **H2 subheadings** (`##`) — **descriptive and original** (do **not** reuse “news”, “glenn”, “george”, or source names as headings).\n  * Optional concluding H2: **“What This Means for America”** if it fits the topic.\n* Maintain Glenn’s **voice and worldview** (moral clarity, warnings about centralization, constitutionalism, limited government, first principles).\n* Use **news** sources for dated, attributable facts.\n* Use **glenn** sources to model tone, style, and framing; cite if they explicitly ground a claim or quotation.\n* Use **george** to shape the philosophical spine only (no citations; paraphrase ideas without naming those works or authors).\nGot it — you’ll want a short **meta instruction** inside the prompt that clarifies *where* the sources are coming from, so the AI knows how to treat them. Here’s a clean snippet you can paste into your master prompt:\n\n---\n\n### Source definitions (do not mention these categories in the article)\n\n***news**: Live, breaking news reporting pulled from NewsAPI (citations required).\n* **glenn**: Glenn Beck’s own books and articles (used for style, tone, worldview; cite only if directly quoting or referencing).\n* **george**: Founding-era and historical texts (used for principles and philosophical grounding; **never cited** directly).\n\n---\n\nWould you like me to **re-insert this directly into the full prompt I gave you earlier**, so it’s a single, ready-to-paste version?\n\n---\n\n## Reading the sources\n\n1. **Open and read** the `url` for each item in `sections.news` (and, when useful, in `sections.glenn`) to ground the article.\n2. Extract **verifiable details** (who/what/when/where/why/quotes) from **news** items.\n3. If a URL is blocked or unavailable, use the item’s metadata in the bundle; **do not invent** missing facts.\n4. Prefer **non-duplicate** news items and higher quality sources (the bundle may include a `duplicate` flag and `source_priority`—use them as hints).\n\n---\n\n## Sourcing & attribution\n\n* **Cite only news and Glenn sources** when you rely on them for facts or quoted language:\n\n  * Inline example: “As reported by [Outlet Name](link), …”\n  * Use natural language citations (no footnotes, no numeric brackets).\n* **Do not cite** the “george” items; let their ideas inform your framing, not your references.\n* Keep quotations short and accurate; clearly attribute them.\n\n---\n\n## Critical constraints\n\n* **Do not introduce or fabricate facts** not present in the provided bundle or the opened URLs.\n* **Use only** the given bundle and opened links (no external knowledge).\n* **Respect topic scope** and keep sections coherent and sequential.\n* **Total content length** should be **900–1100 words** (soft target).\n* **Valid Markdown** only (H1 for the title, H2 for subsections, paragraphs/quotes/links).\n* **No bullet lists** unless a short list is unavoidable for clarity; prioritize narrative flow.\n* Avoid filler or repetition; don’t “echo” headings as first sentences.\n* If any source material is ambiguous, say so and explain what is known/unknown—**do not invent**.\n\n---\n\n## Structure blueprint (adapt; don’t force)\n\n* `# {Strong, specific headline that previews the thesis}`\n* `## {What changed or is breaking right now}`\n  Concise summary of the new development, supported by **news** citations.\n* `## {Why this matters immediately}`\n  Near-term consequences; who is affected; ground in **news** details.\n* `## {The pattern behind it}`\n  Connect to ongoing trends; here you can channel **Glenn’s framing** (cite Glenn if you reference a specific idea from his writing).\n* `## {First principles and the republic}`\n  Constitutional/first-principles vantage (informed by **george** ideas; **no citations**).\n* `## What This Means for America` *(optional, keep if it fits)*\n  Clear takeaways, prudent action/awareness, sober tone—no fear-mongering.\n\n> You may **rename and reorder** subsections as needed. Subheads must be **meaningful, varied, and specific** to the story (e.g., “White House Rebrands the Pentagon: What Actually Changes,” not “Glenn” or “News”).\n\n---\n\n## Input format (what you receive)\n\nYou will receive JSON like:\n\n```json\n{\n  \"topic\": \"<topic string>\",\n  \"counts\": { \"news\": 3, \"glenn\": 3, \"george\": 3, \"total\": 9 },\n  \"sections\": {\n    \"news\":   [ { \"title\": \"...\", \"url\": \"...\", \"source\": \"...\", \"date\": \"...\", \"duplicate\": false, \"source_priority\": 231 } ],\n    \"glenn\":  [ { \"title\": \"...\", \"url\": \"...\", \"author\": \"Glenn Beck\" } ],\n    \"george\": [ { \"title\": \"...\", \"url\": \"...\", \"author\": \"...\" } ]\n  },\n  \"citations\": [ { \"title\": \"...\", \"url\": \"...\", \"source\": \"glenn\", \"author\": \"Glenn Beck\" } ]\n}\n```\n\nTreat this as your **complete** research set.\n\n---\n\n## Output requirements\n\n* A **single Markdown article** for this topic bundle.\n* **H1 title** and **H2 subsections** as described.\n* Inline, natural-language citations for any facts/quotes from **news** (and **glenn** when quoting/referencing a specific text).\n* **No mention** of “george,” “glenn section,” “news section,” or provider labels in headings or body.\n\n---\n\n## Execution checklist (do this before writing)\n\n1. Parse `topic` and skim all items in `sections.news`, then **open and read** their URLs (if tools available).\n2. Identify duplicates or low-value hits; prefer higher-signal reporting.\n3. Extract the key verified timeline and actors.\n4. Skim **glenn** items/URLs to capture tone, argumentative scaffolding, and any specific lines you might cite.\n5. Note **george** principles that fit this case; use them for moral/constitutional framing (no citations).\n6. Draft the article to **900–1100 words** with strong H1 and **distinct, descriptive** H2s.\n\n---\n\n### Important style reminders\n\n* Glenn’s tone: direct, morally anchored, historically aware, wary of centralized authority, protective of individual liberty and local institutions.\n* Confident but fair; avoid ad hominem; let facts lead and analysis clarify.\n* Subheads must **not** simply restate the topic or provider names—make them **reader-useful** signposts.\n\n---\n\n**Now write the article.**\n",
+              "role": "system"
+            },
+            {
+              "content": "=Write one article for this topic and context.\n\nTopic:\n{{$json.topic}}\n\nContext bundle (JSON):\n{{$json | json}}\n"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 2500
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        672,
+        -208
+      ],
+      "id": "6f4a9a51-613b-4016-bce4-465cb8e6fbb3",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "AvX6swAILmUuCIid",
+          "name": "OpenAi account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get Trending Topics (SerpAPI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Trending Topics (SerpAPI)": {
+      "main": [
+        [
+          {
+            "node": "Rank & Select Top 3 Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Articles (NewsAPI)": {
+      "main": [
+        [
+          {
+            "node": "Rank & Select Top 3 Google",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank & Select Top 3 Topics": {
+      "main": [
+        [
+          {
+            "node": "Separate into 3 topic items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Each Topic": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Glenn API",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "News API",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "George API",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Context Bundle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Safe Query": {
+      "main": [
+        [
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Glenn Vector Q": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "George Vector Q": {
+      "main": [
+        [
+          {
+            "node": "Wait2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Rank & Select Top 3 Glenn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Rank & Select Top 3 George",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank & Select Top 3 Glenn": {
+      "main": [
+        [
+          {
+            "node": "George+News API's",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank & Select Top 3 Google": {
+      "main": [
+        [
+          {
+            "node": "George+News API's",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Rank & Select Top 3 George": {
+      "main": [
+        [
+          {
+            "node": "George+News+Glenn News API's",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        []
+      ]
+    },
+    "News sent through Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "George+News API's": {
+      "main": [
+        [
+          {
+            "node": "George+News+Glenn News API's",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "George+News+Glenn News API's": {
+      "main": [
+        [
+          {
+            "node": "Build Context Bundle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context Bundle": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait2": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News API": {
+      "main": [
+        [
+          {
+            "node": "Split Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Glenn API": {
+      "main": [
+        [
+          {
+            "node": "Rank & Select Top 3 Glenn API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "George API": {
+      "main": [
+        [
+          {
+            "node": "Rank & Select Top 3 George API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Items": {
+      "main": [
+        [
+          {
+            "node": "Rank & Select Top 3 Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank & Select Top 3 Articles": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Rank & Select Top 3 Glenn API": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rank & Select Top 3 George API": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Context Bundle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Separate into 3 topic items": {
+      "main": [
+        [
+          {
+            "node": "Process Each Topic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Context Bundle": {
+      "main": [
+        [
+          {
+            "node": "Process Each Topic",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Glenn AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {
+    "When clicking ‘Execute workflow’": [
+      {
+        "json": {}
+      }
+    ]
+  },
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

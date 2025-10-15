@@ -1,0 +1,69 @@
+{
+  "name": "My Sub-workflow",
+  "nodes": [
+    {
+      "type": "n8n-nodes-base.gmailTool",
+      "typeVersion": 2.1,
+      "position": [
+        720,
+        368
+      ],
+      "id": "2ca4ee1b-f8df-4801-968b-88783ad8dcf4",
+      "name": "Send a message in Gmail",
+      "disabled": false,
+      "parameters": {
+        "preBuiltAgentsCalloutGmail": "",
+        "descriptionType": "auto",
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "vishfan12@gmail.com",
+        "subject": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Subject', ``, 'string') }}",
+        "emailType": "html",
+        "message": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message', ``, 'string') }}",
+        "options": {}
+      },
+      "webhookId": "8817dcce-c966-4d0c-869a-ed812a897bc4",
+      "issues": {},
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xCc6kSiGtUG0HRXO",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "id": "e4f2ad1c-4987-4371-9c09-5b07d36aa0e6",
+      "typeVersion": 1.1,
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        512,
+        368
+      ],
+      "parameters": {
+        "inputSource": "passthrough"
+      }
+    }
+  ],
+  "connections": {
+    "Send a message in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "triggerCount": 0,
+  "meta": null
+}
